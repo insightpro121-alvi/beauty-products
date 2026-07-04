@@ -1,4 +1,7 @@
 <?php
+require_once 'config/database.php';
+require_once 'config/auth.php';
+
 // Beauty Products Database
 $products = [
     [
@@ -57,18 +60,28 @@ $products = [
     ]
 ];
 
-// Get category filter
+// Get search query
+$search = isset($_GET['search']) ? sanitize($_GET['search']) : '';
 $selected_category = isset($_GET['category']) ? $_GET['category'] : 'All';
 
 // Filter products
-$filtered_products = $selected_category === 'All' 
-    ? $products 
-    : array_filter($products, function($p) use ($selected_category) {
+$filtered_products = $products;
+
+if (!empty($search)) {
+    $filtered_products = array_filter($filtered_products, function($p) use ($search) {
+        return stripos($p['name'], $search) !== false || stripos($p['description'], $search) !== false;
+    });
+}
+
+if ($selected_category !== 'All') {
+    $filtered_products = array_filter($filtered_products, function($p) use ($selected_category) {
         return $p['category'] === $selected_category;
     });
+}
 
-// Get unique categories
 $categories = array_unique(array_column($products, 'category'));
+$user = isLoggedIn() ? getCurrentUser() : null;
+$wishlistIds = isLoggedIn() ? $db->getUserWishlist($user['id']) : [];
 ?>
 
 <!DOCTYPE html>
@@ -78,6 +91,52 @@ $categories = array_unique(array_column($products, 'category'));
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Beauty Haven - Premium Beauty Products</title>
     <link rel="stylesheet" href="styles.css">
+    <style>
+        .search-bar {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 2rem;
+            max-width: 600px;
+        }
+
+        .search-bar input {
+            flex: 1;
+            padding: 0.8rem;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 1em;
+        }
+
+        .search-bar button {
+            padding: 0.8rem 1.5rem;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .product-card {
+            position: relative;
+        }
+
+        .wishlist-heart {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: white;
+            border: none;
+            font-size: 1.5em;
+            cursor: pointer;
+            padding: 0.5rem;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+    </style>
 </head>
 <body>
     <!-- Navigation -->
@@ -89,6 +148,14 @@ $categories = array_unique(array_column($products, 'category'));
                 <li><a href="#products">Products</a></li>
                 <li><a href="#about">About</a></li>
                 <li><a href="#contact">Contact</a></li>
+                <?php if (isLoggedIn()): ?>
+                    <li><a href="wishlist.php">❤️ Wishlist</a></li>
+                    <li><a href="profile.php">👤 <?= htmlspecialchars($user['username']) ?></a></li>
+                    <li><a href="logout.php">Logout</a></li>
+                <?php else: ?>
+                    <li><a href="login.php">Login</a></li>
+                    <li><a href="signup.php">Sign Up</a></li>
+                <?php endif; ?>
                 <li class="cart-link"><a href="cart.php">🛒 Cart</a></li>
             </ul>
         </div>
@@ -108,11 +175,17 @@ $categories = array_unique(array_column($products, 'category'));
         <div class="container">
             <h2>Our Products</h2>
             
+            <!-- Search Bar -->
+            <form method="GET" class="search-bar">
+                <input type="text" name="search" placeholder="Search products..." value="<?= htmlspecialchars($search) ?>">
+                <button type="submit">Search</button>
+            </form>
+            
             <!-- Category Filter -->
             <div class="filter-section">
-                <a href="index.php?category=All" class="filter-btn <?= $selected_category === 'All' ? 'active' : '' ?>">All Products</a>
+                <a href="index.php?search=<?= urlencode($search) ?>&category=All" class="filter-btn <?= $selected_category === 'All' ? 'active' : '' ?>">All Products</a>
                 <?php foreach($categories as $cat): ?>
-                    <a href="index.php?category=<?= urlencode($cat) ?>" class="filter-btn <?= $selected_category === $cat ? 'active' : '' ?>"><?= htmlspecialchars($cat) ?></a>
+                    <a href="index.php?search=<?= urlencode($search) ?>&category=<?= urlencode($cat) ?>" class="filter-btn <?= $selected_category === $cat ? 'active' : '' ?>"><?= htmlspecialchars($cat) ?></a>
                 <?php endforeach; ?>
             </div>
 
@@ -123,6 +196,11 @@ $categories = array_unique(array_column($products, 'category'));
                         <div class="product-image">
                             <img src="<?= htmlspecialchars($product['image']) ?>" alt="<?= htmlspecialchars($product['name']) ?>">
                             <span class="category-badge"><?= htmlspecialchars($product['category']) ?></span>
+                            <?php if (isLoggedIn()): ?>
+                                <button class="wishlist-heart" onclick="toggleWishlist(<?= $product['id'] ?>)">
+                                    <?= in_array($product['id'], $wishlistIds) ? '❤️' : '🤍' ?>
+                                </button>
+                            <?php endif; ?>
                         </div>
                         <div class="product-info">
                             <h3><?= htmlspecialchars($product['name']) ?></h3>
@@ -141,7 +219,7 @@ $categories = array_unique(array_column($products, 'category'));
             </div>
 
             <?php if(empty($filtered_products)): ?>
-                <p class="no-products">No products found in this category.</p>
+                <p class="no-products">No products found. Try a different search or category.</p>
             <?php endif; ?>
         </div>
     </section>
@@ -176,5 +254,25 @@ $categories = array_unique(array_column($products, 'category'));
     </footer>
 
     <script src="script.js"></script>
+    <script>
+        function toggleWishlist(productId) {
+            fetch('api/wishlist.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    action: 'add',
+                    product_id: productId
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    location.reload();
+                }
+            });
+        }
+    </script>
 </body>
 </html>
